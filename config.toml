@@ -1,0 +1,22 @@
+[android_profiling]
+# Default Android package name
+package_name = "org.mozilla.fenix"
+
+# Default URL for app startup
+startup_url = "https://shell--mozilla-speedometer-preview.netlify.app/resources/newssite/news-nuxt/dist/index.html"
+
+# Path to samply binary
+samply_binary = "samply"
+
+# Symbol directories and servers (all optional)
+# Can be single values or arrays
+breakpad_symbol_servers = ["https://symbols.mozilla.org/try/"]
+symbol_dirs = ["~/code/obj-m-android/dist/bin"] # E.g. ["~/src/obj-android/dist/bin"]
+breakpad_symbol_dirs = [] # E.g. ["~/Downloads/target.crashreporter-symbols(5)"]
+
+# Merge script path
+merge_script = "./merge-android-profiles/merge-android-profiles.js"
+
+# Profiling settings
+duration = 10 # in seconds
+frequency = 1000 # in Hz
