@@ -19,6 +19,39 @@ from typing import Any
 
 import toml
 
+WARMUP_BACKGROUND_TABS = [
+    "https://www.google.com/search?q=toronto+weather",
+    "https://en.m.wikipedia.org/wiki/Anemone_hepatica",
+    "https://www.temu.com",
+    "https://www.espn.com/nfl/game/_/gameId/401671793/chiefs-falcons",
+]
+
+# Apps whose processes we kill before the test
+BROWSER_PACKAGE_NAMES = [
+    "org.mozilla.firefox",
+    "org.mozilla.fenix",
+    "org.mozilla.fenix.debug",
+    "org.chromium.chrome",
+    "com.android.chrome",
+]
+
+# PACKAGE_NAME will be replaced with the package name
+GECKOVIEW_CONFIG = """env:
+  PERF_SPEW_DIR: /storage/emulated/0/Android/data/PACKAGE_NAME/files
+  IONPERF: func
+  JIT_OPTION_emitInterpreterEntryTrampoline: true
+  JIT_OPTION_enableICFramePointers: true
+  JIT_OPTION_onlyInlineSelfHosted: true
+
+#   MOZ_LOG: "ScriptPreloader:5,IndexedDB:5,mozStorage:5"
+
+  MOZ_PROFILER_STARTUP: 1
+  MOZ_PROFILER_STARTUP_NO_BASE: 1 # bug 1955125
+  MOZ_PROFILER_STARTUP_INTERVAL: 500
+  MOZ_PROFILER_STARTUP_FEATURES: nostacksampling,nomarkerstacks,screenshots,ipcmessages,java,cpu,markersallthreads,flows,fileio
+  MOZ_PROFILER_STARTUP_FILTERS: GeckoMain,Compositor,Renderer,IPDL Background,*
+"""
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,6 +97,8 @@ class AndroidProfileAutomation:
         self,
         config_path: str = "config.toml",
         device_id: str | None = None,
+        with_warmup: bool = False,
+        profile_warmup: bool = False,
         use_java: bool = False,
         package: str | None = None,
         url: str | None = None,
@@ -75,7 +110,20 @@ class AndroidProfileAutomation:
         self.temp_dir: str | None = None
         self.device_id = device_id
         self.use_java = use_java
+        self.with_warmup = with_warmup
+        self.profile_warmup = profile_warmup
         self.debug_app_set = False  # Track if we've set debug app
+        self.yaml_file_path = None
+
+        if "duration" not in self.config:
+            self.config["duration"] = 26 if profile_warmup else 6
+
+        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.simpleperf_profile_path = str(
+            script_dir / "out" / f"simpleperf-profile_{timestamp}.json.gz"
+        )
+        self.gecko_profile_path = str(script_dir / "out" / f"gecko-profile_{timestamp}.json.gz")
 
         # Determine output file path
         if output_path:
@@ -84,10 +132,7 @@ class AndroidProfileAutomation:
             self.should_open_with_samply = False
         else:
             # Store to ./out/merged-profile-<DATE>-<TIME>.json.gz
-            script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"merged-profile_{timestamp}.json.gz"
-            self.output_path = str(script_dir / "out" / filename)
+            self.output_path = str(script_dir / "out" / f"merged-profile_{timestamp}.json.gz")
             self.should_open_with_samply = True
 
         # Apply CLI overrides
@@ -110,6 +155,10 @@ class AndroidProfileAutomation:
         self.breakpad_symbol_servers: list[str] = [
             s for s in self.config["breakpad_symbol_servers"] if s
         ]
+
+        self.activity_name = "org.mozilla.fenix.IntentReceiverActivity"
+        if ".chrome" in self.config["package_name"]:
+            self.activity_name = "com.google.android.apps.chrome.IntentDispatcher"
 
         # Make out_dir relative to the script location, not the current working directory
         script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -218,8 +267,6 @@ class AndroidProfileAutomation:
     def cleanup_temp_directory(self) -> None:
         """Clean up temporary directory."""
         if self.temp_dir and os.path.exists(self.temp_dir):
-            import shutil
-
             # shutil.rmtree(self.temp_dir)
             logger.debug(f"Cleaned up temporary directory: {self.temp_dir}")
 
@@ -232,6 +279,15 @@ class AndroidProfileAutomation:
                 self.debug_app_set = False
             except Exception as e:
                 logger.warning(f"Failed to clear debug app state: {e}")
+
+        if self.yaml_file_path:
+            try:
+                yaml_file_path = self.yaml_file_path
+                self._run_adb_command(f'shell rm "{yaml_file_path}"')
+                logger.debug("Deleted yaml file (gecko profiling)")
+                self.debug_app_set = False
+            except Exception as e:
+                logger.warning(f"Failed delete yaml file (gecko profiling): {e}")
 
     def validate_environment(self) -> None:
         """Validate that all required tools and environment are available."""
@@ -317,37 +373,19 @@ class AndroidProfileAutomation:
 
         logger.debug("simpleperf available on device")
 
-    def create_geckoview_config(self) -> str:
+    def setup_gecko_profiling(self) -> None:
         """Create the GeckoView configuration file."""
         package_name = self.config["package_name"]
-        config_content = f"""env:
-  PERF_SPEW_DIR: /storage/emulated/0/Android/data/{package_name}/files
-  IONPERF: func
-  JIT_OPTION_emitInterpreterEntryTrampoline: true
-  JIT_OPTION_enableICFramePointers: true
-  JIT_OPTION_onlyInlineSelfHosted: true
-
-  MOZ_PROFILER_STARTUP: 1
-  MOZ_PROFILER_STARTUP_NO_BASE: 1 # bug 1955125
-  MOZ_PROFILER_STARTUP_INTERVAL: 500
-  MOZ_PROFILER_STARTUP_FEATURES: nostacksampling,nomarkerstacks,screenshots,ipcmessages,java,cpu,markersallthreads,flows
-  MOZ_PROFILER_STARTUP_FILTERS: GeckoMain,Compositor,Renderer,IPDL Background,*
-"""
 
         config_filename = f"{package_name}-geckoview-config.yaml"
         config_path = os.path.join(self.temp_dir or "", config_filename)
         with open(config_path, "w") as f:
-            f.write(config_content)
-
-        return config_path
-
-    def setup_device(self, config_path: str) -> None:
-        """Setup the Android device for profiling."""
-        package_name = self.config["package_name"]
+            f.write(GECKOVIEW_CONFIG.replace("PACKAGE_NAME", package_name))
 
         self._run_adb_command(f'push "{config_path}" /data/local/tmp/')
         self._run_adb_command(f"shell am set-debug-app --persistent {package_name}")
         self.debug_app_set = True
+        self.yaml_file_path = f"/data/local/tmp/{config_filename}"
 
     def start_simpleperf_recording(self) -> subprocess.Popen[bytes]:
         """Start simpleperf recording in background."""
@@ -359,7 +397,11 @@ class AndroidProfileAutomation:
 
         cmd = (
             f'shell su -c "/data/local/tmp/simpleperf record {callgraph_option} '
-            f"--duration {duration} -f {frequency} --trace-offcpu -e cpu-clock "
+            f"--duration {duration} "
+            f" -f {frequency} "
+            # f'--trace-offcpu '
+            f"-e cpu-clock "
+            # f'-e binder:binder_ioctl -c 1 '
             f'-a -o /data/local/tmp/su-perf.data"'
         )
 
@@ -383,21 +425,67 @@ class AndroidProfileAutomation:
                 full_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
 
-        time.sleep(2)  # Give simpleperf time to start
+        # Give simpleperf time to start
+        if self.use_java:
+            time.sleep(4)
+        else:
+            time.sleep(2)
         return proc
 
     def trigger_app_startup(self) -> None:
         """Trigger the app startup sequence."""
+
+        if self.profile_warmup:
+            self.run_warmup_scenario()
+            time.sleep(10)
+        else:
+            self.run_startup_scenario()
+
+    def run_warmup_scenario(self) -> None:
         package_name = self.config["package_name"]
+        activity_name = self.activity_name
+
+        self._run_adb_command(f"shell am force-stop {package_name}")
+
+        self._run_adb_command(
+            f"shell pm clear {package_name}"
+        )  # this will also kill any running processes
+        time.sleep(3)
+        self._run_adb_command(
+            f"shell pm grant {package_name} android.permission.POST_NOTIFICATIONS"
+        )
+        self._run_adb_command(
+            f"shell am start-activity -W -a android.intent.action.MAIN --ez performancetest true -n {package_name}/org.mozilla.fenix.App"
+        )
+
+        for website in WARMUP_BACKGROUND_TABS:
+            website_cmd = (
+                f'shell am start-activity -d "{website}" '
+                f"-a android.intent.action.VIEW "
+                f"{package_name}/{activity_name}"
+            )
+
+            self._run_adb_command(website_cmd)
+            time.sleep(3)
+
+    def run_startup_scenario(self) -> None:
+        package_name = self.config["package_name"]
+        activity_name = self.activity_name
         startup_url = self.config["startup_url"]
 
         self._run_adb_command(f"shell am force-stop {package_name}")
+        self._run_adb_command(
+            f"shell pm grant {package_name} android.permission.POST_NOTIFICATIONS"
+        )
 
         startup_cmd = (
             f'shell am start-activity -d "{startup_url}" '
             f"-a android.intent.action.VIEW "
-            f"{package_name}/org.mozilla.fenix.IntentReceiverActivity"
+            f"{package_name}/{activity_name}"
         )
+        # startup_cmd = (
+        #     f"shell am start-activity -W -a android.intent.action.MAIN --ez performancetest true -n {package_name}/org.mozilla.fenix.App"
+        # )
 
         self._run_adb_command(startup_cmd)
 
@@ -411,9 +499,8 @@ class AndroidProfileAutomation:
         """Capture the Gecko Profile."""
 
         package_name = self.config["package_name"]
-        profile_path = os.path.join(self.temp_dir or "", "my-startup-profile.json.gz")
 
-        with open(profile_path, "wb") as output_file:
+        with open(self.gecko_profile_path, "wb") as output_file:
             result = subprocess.run(
                 [
                     "adb",
@@ -474,7 +561,10 @@ class AndroidProfileAutomation:
             cmd_parts.extend(["--breakpad-symbol-dir", f'"{symbol_dir}"'])
 
         # Add final arguments
-        cmd_parts.extend(["--presymbolicate", "--save-only", "-o", "simpleperf.json.gz"])
+        cmd_parts.extend(["--presymbolicate"])
+        cmd_parts.extend(["--save-only", "-o", self.simpleperf_profile_path])
+        # cmd_parts.extend(["--per-cpu-threads"])
+        # cmd_parts.extend(["--cswitch-markers"])
 
         cmd = " ".join(cmd_parts)
         result = self._run_command(cmd, cwd=self.temp_dir)
@@ -487,15 +577,17 @@ class AndroidProfileAutomation:
 
         cmd = (
             f'node "{self.merge_script}" '
-            f"--samples-file simpleperf.json.gz "
-            f"--markers-file my-startup-profile.json.gz "
+            f'--samples-file  "{self.simpleperf_profile_path}" '
+            f'--markers-file "{self.gecko_profile_path}" '
             f'--output-file "{self.output_path}" '
             f"--filter-by-process-prefix {package_name}"
         )
 
         result = self._run_command(cmd, cwd=self.temp_dir)
         if result.returncode != 0:
-            raise RuntimeError("Failed to merge profiles")
+            logger.error("Failed to merge profiles")
+            self.output_path = self.simpleperf_profile_path
+            # raise RuntimeError("Failed to merge profiles")
 
     def handle_output(self) -> None:
         """Handle the merged profile output - either save or auto-load."""
@@ -525,6 +617,18 @@ class AndroidProfileAutomation:
         except Exception as e:
             logger.error(f"Failed to run samply load: {e}")
 
+    def _kill_processes(self, package_names: list[str]) -> None:
+        for package_name in package_names:
+            self._run_adb_command(f"shell am force-stop {package_name}")
+
+    def kill_relevant_processes(self) -> None:
+        package_name = self.config["package_name"]
+        packages_to_kill = [package_name, f"{package_name}_zygote"]
+        for pkg in BROWSER_PACKAGE_NAMES:
+            packages_to_kill.extend([pkg, f"{pkg}_zygote"])
+        self._kill_processes(packages_to_kill)
+        time.sleep(2)
+
     def run(self) -> None:
         """Run the complete automation workflow."""
         try:
@@ -533,10 +637,16 @@ class AndroidProfileAutomation:
             # Validate environment first
             self.validate_environment()
 
+            if self.with_warmup:
+                self.kill_relevant_processes()
+                self.run_warmup_scenario()
+
             # Setup
             self.setup_temp_directory()
-            config_path = self.create_geckoview_config()
-            self.setup_device(config_path)
+            self.setup_gecko_profiling()
+
+            # Kill any running processes
+            self.kill_relevant_processes()
 
             # Start profiling
             simpleperf_proc = self.start_simpleperf_recording()
@@ -583,6 +693,16 @@ def main() -> None:
         action="store_true",
         help="Use DWARF unwinding (-g, gives you Java stacks) instead of framepointer unwinding (--call-graph fp, allows deeper stacks and JS JIT stacks)",
     )
+    parser.add_argument(
+        "--with-warmup",
+        action="store_true",
+        help="Clear app data and run warmup before the profiling run",
+    )
+    parser.add_argument(
+        "--profile-warmup",
+        action="store_true",
+        help="Profile the applink startup warmup run",
+    )
 
     # Config overrides
     parser.add_argument("--package", help="Override package name from config")
@@ -618,6 +738,8 @@ def main() -> None:
         config_path=args.config,
         device_id=args.device,
         use_java=args.java,
+        with_warmup=args.with_warmup,
+        profile_warmup=args.profile_warmup,
         package=args.package,
         url=args.url,
         duration=args.duration,
