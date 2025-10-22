@@ -217,7 +217,7 @@ class AndroidProfileAutomation:
         if self.temp_dir and os.path.exists(self.temp_dir):
             import shutil
 
-            shutil.rmtree(self.temp_dir)
+            # shutil.rmtree(self.temp_dir)
             logger.debug(f"Cleaned up temporary directory: {self.temp_dir}")
 
     def cleanup_device_state(self) -> None:
