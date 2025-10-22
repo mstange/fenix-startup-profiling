@@ -469,7 +469,9 @@ class AndroidProfileAutomation:
         cmd_parts.extend(["--presymbolicate", "--save-only", "-o", "simpleperf.json.gz"])
 
         cmd = " ".join(cmd_parts)
-        self._run_command(cmd, cwd=self.temp_dir)
+        result = self._run_command(cmd, cwd=self.temp_dir)
+        if result.returncode != 0:
+            raise RuntimeError("Failed to run samply import")
 
     def merge_profiles(self) -> None:
         """Merge the simpleperf and Gecko profiles."""
@@ -483,7 +485,9 @@ class AndroidProfileAutomation:
             f"--filter-by-process-prefix {package_name}"
         )
 
-        self._run_command(cmd, cwd=self.temp_dir)
+        result = self._run_command(cmd, cwd=self.temp_dir)
+        if result.returncode != 0:
+            raise RuntimeError("Failed to merge profiles")
 
     def handle_output(self) -> None:
         """Handle the merged profile output - either save or auto-load."""
