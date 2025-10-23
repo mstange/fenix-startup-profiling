@@ -325,7 +325,7 @@ class AndroidProfileAutomation:
   JIT_OPTION_onlyInlineSelfHosted: true
 
   MOZ_PROFILER_STARTUP: 1
-  MOZ_PROFILER_STARTUP_NO_BASE=: 1 # bug 1955125
+  MOZ_PROFILER_STARTUP_NO_BASE: 1 # bug 1955125
   MOZ_PROFILER_STARTUP_INTERVAL: 500
   MOZ_PROFILER_STARTUP_FEATURES: nostacksampling,nomarkerstacks,screenshots,ipcmessages,java,cpu,markersallthreads,flows
   MOZ_PROFILER_STARTUP_FILTERS: GeckoMain,Compositor,Renderer,IPDL Background,*
