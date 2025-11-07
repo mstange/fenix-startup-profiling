@@ -407,23 +407,28 @@ class AndroidProfileAutomation:
     def capture_gecko_profile(self) -> None:
         """Capture the Gecko Profile."""
 
-        self._run_adb_command("shell rm /storage/emulated/0/Download/my-startup-profile.json.gz")
-
         package_name = self.config["package_name"]
-        service_name = f"{package_name}/org.mozilla.fenix.perf.ProfilerService"
-        stop_cmd = (
-            f"shell am start-service -n {service_name} "
-            f"-a mozilla.perf.action.STOP_PROFILING "
-            f'--es "output_filename" my-startup-profile.json.gz'
-        )
-
-        self._run_adb_command(stop_cmd)
-        time.sleep(5)  # Wait for profile to be saved
-
         profile_path = os.path.join(self.temp_dir or "", "my-startup-profile.json.gz")
-        self._run_adb_command(
-            f'pull /storage/emulated/0/Download/my-startup-profile.json.gz "{profile_path}"'
-        )
+
+        with open(profile_path, "wb") as output_file:
+            result = subprocess.run(
+                [
+                    "adb",
+                    "shell",
+                    "content",
+                    "read",
+                    "--uri",
+                    f"content://{package_name}.profiler/stop-and-upload",
+                ],
+                stdout=output_file,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        if result.returncode != 0:
+            print(
+                f"Warning: Failed to stop profiler via content provider (exit code {result.returncode})"
+            )
 
     def collect_simpleperf_data(self, simpleperf_proc: subprocess.Popen[bytes]) -> None:
         """Wait for simpleperf to complete and collect data."""
