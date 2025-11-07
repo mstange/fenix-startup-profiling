@@ -513,7 +513,11 @@ class AndroidProfileAutomation:
 
         try:
             # Always show output for samply load (it's interactive)
-            subprocess.run(cmd, shell=True)
+            subprocess.run(
+                cmd,
+                shell=True,
+                env={"PROFILER_URL": "https://deploy-preview-5190--perf-html.netlify.app/"},
+            )
         except KeyboardInterrupt:
             # Ctrl+C is expected for closing samply - don't treat as error
             logger.info("Profile viewer closed")
