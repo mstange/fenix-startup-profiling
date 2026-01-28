@@ -115,6 +115,9 @@ class AndroidProfileAutomation:
         script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
         self.out_dir = script_dir / "out"
 
+        # For convenience, create the out_dir
+        os.makedirs(self.out_dir, exist_ok=True)
+
     def _load_config(self, config_path: str) -> dict[str, Any]:
         """Load configuration from TOML file."""
         try:
@@ -513,11 +516,9 @@ class AndroidProfileAutomation:
 
         try:
             # Always show output for samply load (it's interactive)
-            subprocess.run(
-                cmd,
-                shell=True,
-                env={"PROFILER_URL": "https://deploy-preview-5190--perf-html.netlify.app/"},
-            )
+            env = os.environ.copy()
+            env["PROFILER_URL"] = "https://deploy-preview-5190--perf-html.netlify.app/"
+            subprocess.run(cmd, shell=True, env=env)
         except KeyboardInterrupt:
             # Ctrl+C is expected for closing samply - don't treat as error
             logger.info("Profile viewer closed")
