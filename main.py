@@ -297,7 +297,7 @@ class AndroidProfileAutomation:
     def _validate_device_tools(self) -> None:
         """Validate that required tools are available on the device."""
         # Check if su works
-        result = self._run_adb_command("shell su -c 'echo test'", capture_output=True)
+        result = self._run_adb_command("shell su root echo test", capture_output=True)
         if result.returncode != 0 or "test" not in result.stdout:
             raise RuntimeError(
                 "Root access (su) not available on device. Please root the device or grant root access."
@@ -358,9 +358,9 @@ class AndroidProfileAutomation:
         callgraph_option = "-g" if self.use_java else "--call-graph fp"
 
         cmd = (
-            f'shell su -c "/data/local/tmp/simpleperf record {callgraph_option} '
+            f'shell su root /data/local/tmp/simpleperf record {callgraph_option} '
             f"--duration {duration} -f {frequency} --trace-offcpu -e cpu-clock "
-            f'-a -o /data/local/tmp/su-perf.data"'
+            f'-a -o /data/local/tmp/su-perf.data'
         )
 
         logger.info(
