@@ -1,6 +1,6 @@
 [android_profiling]
 # Default Android package name
-package_name = "org.mozilla.fenix"
+package_name = "org.mozilla.firefox"
 
 # Default URL for app startup
 startup_url = "https://shell--mozilla-speedometer-preview.netlify.app/resources/newssite/news-nuxt/dist/index.html"
