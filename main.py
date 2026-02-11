@@ -399,7 +399,7 @@ class AndroidProfileAutomation:
             f'shell su -c "/data/local/tmp/simpleperf record {callgraph_option} '
             f"--duration {duration} "
             f" -f {frequency} "
-            # f'--trace-offcpu '
+            f'--trace-offcpu '
             f"-e cpu-clock "
             # f'-e binder:binder_ioctl -c 1 '
             f'-a -o /data/local/tmp/su-perf.data"'
